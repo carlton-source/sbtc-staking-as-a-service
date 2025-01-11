@@ -12,6 +12,14 @@
 ;; - Additional rewards based on lock duration
 ;; - Supports staking, reward claims, and unstaking after lock period
 
+;; Define the trait for sBTC token interface
+(define-trait sbtc-token-trait
+    (
+        (transfer (uint principal principal) (response bool uint))
+        (get-balance (principal) (response uint uint))
+    )
+)
+
 ;; Constants
 (define-constant contract-owner tx-sender)
 (define-constant err-owner-only (err u100))
@@ -22,17 +30,17 @@
 (define-constant err-lock-period (err u105))
 (define-constant err-invalid-amount (err u106))
 (define-constant minimum-stake-amount u100000) ;; 0.001 sBTC (8 decimals)
-(define-constant rewards-rate u500) ;; 5% annual base rate (scaled by 100)
 (define-constant blocks-per-year u52560) ;; Approximate blocks per year
 
 ;; State Variables
 (define-data-var total-staked uint u0)
 (define-data-var total-rewards uint u0)
 (define-data-var last-reward-block uint u0)
+(define-data-var sbtc-token principal 'SP3DX3H4FEYZJZ586MFBS25ZW3HZDMEW92260R2PR.sbtc)
+(define-data-var rewards-rate uint u500) ;; 5% annual base rate (scaled by 100)
 
 ;; Data Maps
-;; Stores individual stake information per user
-(define-map stakes
+(define-map staker-positions
     principal
     {
         amount: uint,
@@ -43,7 +51,6 @@
     }
 )
 
-;; Tracks historical staking metrics per user
 (define-map staking-stats
     principal
     {
@@ -54,60 +61,57 @@
 )
 
 ;; Read-only Functions
-
-;; Returns stake information for a given staker
-(define-read-only (get-stake (staker principal))
-    (map-get? stakes staker)
+(define-read-only (get-staker-position (staker principal))
+    (map-get? staker-positions staker)
 )
 
-;; Returns historical staking statistics for a given staker
 (define-read-only (get-staking-stats (staker principal))
     (map-get? staking-stats staker)
 )
 
-;; Returns total amount of sBTC currently staked
 (define-read-only (get-total-staked)
     (var-get total-staked)
 )
 
-;; Calculates pending rewards for a staker
 (define-read-only (calculate-rewards (staker principal))
     (let (
-        (stake (unwrap! (get-stake staker) (err u0)))
+        (position (unwrap! (get-staker-position staker) (err u0)))
         (current-block block-height)
-        (blocks-staked (- current-block (get last-claim-block stake)))
-        (stake-amount (get amount stake))
-        (lock-bonus (/ (get lock-period stake) u52560))
+        (blocks-staked (- current-block (get last-claim-block position)))
+        (stake-amount (get amount position))
+        (lock-bonus (/ (get lock-period position) u52560))
     )
     (if (> blocks-staked u0)
         (let (
-            (base-reward (* (* stake-amount rewards-rate) (/ blocks-staked blocks-per-year)))
+            (base-reward (* (* stake-amount (var-get rewards-rate)) (/ blocks-staked blocks-per-year)))
             (bonus-reward (* base-reward lock-bonus))
         )
-        (+ base-reward bonus-reward))
-        u0
+        (ok (+ base-reward bonus-reward)))
+        (ok u0)
     ))
 )
 
 ;; Public Functions
 
-;; Stakes sBTC tokens with specified lock period
-(define-public (stake (amount uint) (lock-period uint))
+;; Defines staking functionality
+(define-public (stake-tokens (sbtc-contract <sbtc-token-trait>) (amount uint) (lock-period uint))
     (let (
         (staker tx-sender)
-        (current-stake (get-stake staker))
+        (current-position (get-staker-position staker))
     )
     (asserts! (> amount minimum-stake-amount) err-minimum-stake)
-    (asserts! (is-none current-stake) err-already-staked)
-    (asserts! (>= lock-period u2628) err-lock-period)
+    (asserts! (is-none current-position) err-already-staked)
+    (asserts! (>= lock-period u2628) err-lock-period) ;; Minimum 1 month lock (2628 blocks)
     
-    (try! (contract-call? 'SP3DX3H4FEYZJZ586MFBS25ZW3HZDMEW92260R2PR.sbtc transfer 
+    ;; Transfer sBTC to contract
+    (try! (contract-call? sbtc-contract transfer 
         amount 
         staker 
         (as-contract tx-sender)
     ))
     
-    (map-set stakes
+    ;; Update staking data
+    (map-set staker-positions
         staker
         {
             amount: amount,
@@ -118,6 +122,7 @@
         }
     )
     
+    ;; Update staking stats
     (let ((stats (default-to 
         {total-staked: u0, total-rewards-claimed: u0, stake-count: u0}
         (get-staking-stats staker))))
@@ -131,36 +136,40 @@
         )
     )
     
+    ;; Update total staked
     (var-set total-staked (+ (var-get total-staked) amount))
     (ok true))
 )
 
-;; Claims accumulated staking rewards
-(define-public (claim-rewards)
+;; Defines reward claiming functionality
+(define-public (claim-rewards (sbtc-contract <sbtc-token-trait>))
     (let (
         (staker tx-sender)
-        (stake (unwrap! (get-stake staker) err-no-stake-found))
-        (rewards (calculate-rewards staker))
+        (position (unwrap! (get-staker-position staker) err-no-stake-found))
+        (rewards (unwrap! (calculate-rewards staker) (err u0)))
     )
     (asserts! (> rewards u0) (err u0))
     
-    (try! (as-contract (contract-call? 'SP3DX3H4FEYZJZ586MFBS25ZW3HZDMEW92260R2PR.sbtc transfer
+    ;; Transfer rewards
+    (try! (as-contract (contract-call? sbtc-contract transfer
         rewards
         (as-contract tx-sender)
         staker
     )))
     
-    (map-set stakes
+    ;; Update stake info
+    (map-set staker-positions
         staker
         {
-            amount: (get amount stake),
-            start-block: (get start-block stake),
-            lock-period: (get lock-period stake),
-            rewards-claimed: (+ (get rewards-claimed stake) rewards),
+            amount: (get amount position),
+            start-block: (get start-block position),
+            lock-period: (get lock-period position),
+            rewards-claimed: (+ (get rewards-claimed position) rewards),
             last-claim-block: block-height
         }
     )
     
+    ;; Update staking stats
     (let ((stats (unwrap! (get-staking-stats staker) err-no-stake-found)))
         (map-set staking-stats
             staker
@@ -176,35 +185,44 @@
     (ok rewards))
 )
 
-;; Unstakes tokens after lock period expires
-(define-public (unstake)
+;; Defines unstaking functionality
+(define-public (unstake (sbtc-contract <sbtc-token-trait>))
     (let (
         (staker tx-sender)
-        (stake (unwrap! (get-stake staker) err-no-stake-found))
+        (position (unwrap! (get-staker-position staker) err-no-stake-found))
         (current-block block-height)
     )
-    (asserts! (>= current-block (+ (get start-block stake) (get lock-period stake))) err-lock-period)
+    ;; Check lock period
+    (asserts! (>= current-block (+ (get start-block position) (get lock-period position))) err-lock-period)
     
-    (try! (claim-rewards))
+    ;; Claim any remaining rewards first
+    (try! (claim-rewards sbtc-contract))
     
-    (try! (as-contract (contract-call? 'SP3DX3H4FEYZJZ586MFBS25ZW3HZDMEW92260R2PR.sbtc transfer
-        (get amount stake)
+    ;; Return staked sBTC
+    (try! (as-contract (contract-call? sbtc-contract transfer
+        (get amount position)
         (as-contract tx-sender)
         staker
     )))
     
-    (map-delete stakes staker)
+    ;; Clear stake data
+    (map-delete staker-positions staker)
     
-    (var-set total-staked (- (var-get total-staked) (get amount stake)))
+    ;; Update total staked
+    (var-set total-staked (- (var-get total-staked) (get amount position)))
     (ok true))
 )
 
 ;; Admin Functions
-
-;; Updates the base reward rate (owner only)
 (define-public (update-rewards-rate (new-rate uint))
     (begin
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
-        (asserts! (< new-rate u10000) err-invalid-amount)
+        (asserts! (< new-rate u10000) err-invalid-amount) ;; Max 100% APR
         (ok (var-set rewards-rate new-rate)))
+)
+
+(define-public (update-sbtc-token (new-token principal))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (ok (var-set sbtc-token new-token)))
 )
