@@ -175,3 +175,36 @@
     (var-set total-rewards (+ (var-get total-rewards) rewards))
     (ok rewards))
 )
+
+;; Unstakes tokens after lock period expires
+(define-public (unstake)
+    (let (
+        (staker tx-sender)
+        (stake (unwrap! (get-stake staker) err-no-stake-found))
+        (current-block block-height)
+    )
+    (asserts! (>= current-block (+ (get start-block stake) (get lock-period stake))) err-lock-period)
+    
+    (try! (claim-rewards))
+    
+    (try! (as-contract (contract-call? 'SP3DX3H4FEYZJZ586MFBS25ZW3HZDMEW92260R2PR.sbtc transfer
+        (get amount stake)
+        (as-contract tx-sender)
+        staker
+    )))
+    
+    (map-delete stakes staker)
+    
+    (var-set total-staked (- (var-get total-staked) (get amount stake)))
+    (ok true))
+)
+
+;; Admin Functions
+
+;; Updates the base reward rate (owner only)
+(define-public (update-rewards-rate (new-rate uint))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (asserts! (< new-rate u10000) err-invalid-amount)
+        (ok (var-set rewards-rate new-rate)))
+)
