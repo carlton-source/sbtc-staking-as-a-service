@@ -88,3 +88,90 @@
         u0
     ))
 )
+
+;; Public Functions
+
+;; Stakes sBTC tokens with specified lock period
+(define-public (stake (amount uint) (lock-period uint))
+    (let (
+        (staker tx-sender)
+        (current-stake (get-stake staker))
+    )
+    (asserts! (> amount minimum-stake-amount) err-minimum-stake)
+    (asserts! (is-none current-stake) err-already-staked)
+    (asserts! (>= lock-period u2628) err-lock-period)
+    
+    (try! (contract-call? 'SP3DX3H4FEYZJZ586MFBS25ZW3HZDMEW92260R2PR.sbtc transfer 
+        amount 
+        staker 
+        (as-contract tx-sender)
+    ))
+    
+    (map-set stakes
+        staker
+        {
+            amount: amount,
+            start-block: block-height,
+            lock-period: lock-period,
+            rewards-claimed: u0,
+            last-claim-block: block-height
+        }
+    )
+    
+    (let ((stats (default-to 
+        {total-staked: u0, total-rewards-claimed: u0, stake-count: u0}
+        (get-staking-stats staker))))
+        (map-set staking-stats
+            staker
+            {
+                total-staked: (+ (get total-staked stats) amount),
+                total-rewards-claimed: (get total-rewards-claimed stats),
+                stake-count: (+ (get stake-count stats) u1)
+            }
+        )
+    )
+    
+    (var-set total-staked (+ (var-get total-staked) amount))
+    (ok true))
+)
+
+;; Claims accumulated staking rewards
+(define-public (claim-rewards)
+    (let (
+        (staker tx-sender)
+        (stake (unwrap! (get-stake staker) err-no-stake-found))
+        (rewards (calculate-rewards staker))
+    )
+    (asserts! (> rewards u0) (err u0))
+    
+    (try! (as-contract (contract-call? 'SP3DX3H4FEYZJZ586MFBS25ZW3HZDMEW92260R2PR.sbtc transfer
+        rewards
+        (as-contract tx-sender)
+        staker
+    )))
+    
+    (map-set stakes
+        staker
+        {
+            amount: (get amount stake),
+            start-block: (get start-block stake),
+            lock-period: (get lock-period stake),
+            rewards-claimed: (+ (get rewards-claimed stake) rewards),
+            last-claim-block: block-height
+        }
+    )
+    
+    (let ((stats (unwrap! (get-staking-stats staker) err-no-stake-found)))
+        (map-set staking-stats
+            staker
+            {
+                total-staked: (get total-staked stats),
+                total-rewards-claimed: (+ (get total-rewards-claimed stats) rewards),
+                stake-count: (get stake-count stats)
+            }
+        )
+    )
+    
+    (var-set total-rewards (+ (var-get total-rewards) rewards))
+    (ok rewards))
+)
