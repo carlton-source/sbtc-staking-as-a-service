@@ -24,3 +24,31 @@
 (define-constant minimum-stake-amount u100000) ;; 0.001 sBTC (8 decimals)
 (define-constant rewards-rate u500) ;; 5% annual base rate (scaled by 100)
 (define-constant blocks-per-year u52560) ;; Approximate blocks per year
+
+;; State Variables
+(define-data-var total-staked uint u0)
+(define-data-var total-rewards uint u0)
+(define-data-var last-reward-block uint u0)
+
+;; Data Maps
+;; Stores individual stake information per user
+(define-map stakes
+    principal
+    {
+        amount: uint,
+        start-block: uint,
+        lock-period: uint,
+        rewards-claimed: uint,
+        last-claim-block: uint
+    }
+)
+
+;; Tracks historical staking metrics per user
+(define-map staking-stats
+    principal
+    {
+        total-staked: uint,
+        total-rewards-claimed: uint,
+        stake-count: uint
+    }
+)
