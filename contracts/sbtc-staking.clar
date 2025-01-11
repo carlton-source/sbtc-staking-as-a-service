@@ -52,3 +52,39 @@
         stake-count: uint
     }
 )
+
+;; Read-only Functions
+
+;; Returns stake information for a given staker
+(define-read-only (get-stake (staker principal))
+    (map-get? stakes staker)
+)
+
+;; Returns historical staking statistics for a given staker
+(define-read-only (get-staking-stats (staker principal))
+    (map-get? staking-stats staker)
+)
+
+;; Returns total amount of sBTC currently staked
+(define-read-only (get-total-staked)
+    (var-get total-staked)
+)
+
+;; Calculates pending rewards for a staker
+(define-read-only (calculate-rewards (staker principal))
+    (let (
+        (stake (unwrap! (get-stake staker) (err u0)))
+        (current-block block-height)
+        (blocks-staked (- current-block (get last-claim-block stake)))
+        (stake-amount (get amount stake))
+        (lock-bonus (/ (get lock-period stake) u52560))
+    )
+    (if (> blocks-staked u0)
+        (let (
+            (base-reward (* (* stake-amount rewards-rate) (/ blocks-staked blocks-per-year)))
+            (bonus-reward (* base-reward lock-bonus))
+        )
+        (+ base-reward bonus-reward))
+        u0
+    ))
+)
