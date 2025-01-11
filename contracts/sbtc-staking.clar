@@ -29,6 +29,7 @@
 (define-constant err-minimum-stake (err u104))
 (define-constant err-lock-period (err u105))
 (define-constant err-invalid-amount (err u106))
+(define-constant err-invalid-contract (err u107))
 (define-constant minimum-stake-amount u100000) ;; 0.001 sBTC (8 decimals)
 (define-constant blocks-per-year u52560) ;; Approximate blocks per year
 
@@ -38,6 +39,11 @@
 (define-data-var last-reward-block uint u0)
 (define-data-var sbtc-token principal 'SP3DX3H4FEYZJZ586MFBS25ZW3HZDMEW92260R2PR.sbtc)
 (define-data-var rewards-rate uint u500) ;; 5% annual base rate (scaled by 100)
+
+;; Helper function to validate sbtc contract
+(define-private (is-valid-sbtc-contract (contract principal))
+    (is-eq contract (var-get sbtc-token))
+)
 
 ;; Data Maps
 (define-map staker-positions
@@ -99,6 +105,8 @@
         (staker tx-sender)
         (current-position (get-staker-position staker))
     )
+    ;; Add contract validation
+    (asserts! (is-valid-sbtc-contract (contract-of sbtc-contract)) err-invalid-contract)
     (asserts! (> amount minimum-stake-amount) err-minimum-stake)
     (asserts! (is-none current-position) err-already-staked)
     (asserts! (>= lock-period u2628) err-lock-period) ;; Minimum 1 month lock (2628 blocks)
@@ -148,6 +156,8 @@
         (position (unwrap! (get-staker-position staker) err-no-stake-found))
         (rewards (unwrap! (calculate-rewards staker) (err u0)))
     )
+    ;; Add contract validation
+    (asserts! (is-valid-sbtc-contract (contract-of sbtc-contract)) err-invalid-contract)
     (asserts! (> rewards u0) (err u0))
     
     ;; Transfer rewards
@@ -192,6 +202,8 @@
         (position (unwrap! (get-staker-position staker) err-no-stake-found))
         (current-block block-height)
     )
+    ;; Add contract validation
+    (asserts! (is-valid-sbtc-contract (contract-of sbtc-contract)) err-invalid-contract)
     ;; Check lock period
     (asserts! (>= current-block (+ (get start-block position) (get lock-period position))) err-lock-period)
     
@@ -224,5 +236,7 @@
 (define-public (update-sbtc-token (new-token principal))
     (begin
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        ;; Add basic validation that the new token implements the required trait
+        (asserts! (is-valid-sbtc-contract new-token) err-invalid-contract)
         (ok (var-set sbtc-token new-token)))
 )
